@@ -1,12 +1,12 @@
 package simfaas
 
 import (
-	`context`
-	`errors`
-	`go.uber.org/atomic`
-	`log`
-	`sync`
-	`time`
+	"context"
+	"errors"
+	"go.uber.org/atomic"
+	"log"
+	"sync"
+	"time"
 )
 
 const (
@@ -21,7 +21,7 @@ type FunctionConfig struct {
 	ColdStart time.Duration
 	KeepWarm  time.Duration
 	Runtime   time.Duration
-	
+
 	// instanceCapacity defines the number of parallel executions a function instance can handle
 	// Negative or zero indicates an infinite capacity; no more than 1 instance is used.
 	// instanceCapacity  int
@@ -32,6 +32,7 @@ type ExecutionReport struct {
 	Runtime    time.Duration `json:"runtime"`
 	StartedAt  time.Time     `json:"started_at"`
 	FinishedAt time.Time     `json:"finished_at"`
+	Response   string        `json:"response"`
 }
 
 type Function struct {
@@ -40,13 +41,13 @@ type Function struct {
 	deployedAt time.Time
 	lastExec   time.Time
 	mu         sync.RWMutex
-	
+
 	// instances reports the number of instances of this function currently deployed.
 	instances atomic.Uint32
-	
+
 	// active reports the number of executions of this function currently running.
 	active atomic.Uint32
-	
+
 	// queued reports the number of executions of this function currently queued,
 	// waiting for instances to free up or additional to be deployed.
 	queued atomic.Uint32
@@ -92,7 +93,7 @@ func (p *Platform) runFunctionGC(closeC <-chan struct{}) {
 				fn.lastExec.Add(fn.KeepWarm).Before(now) &&
 				fn.deployedAt.Add(fn.KeepWarm).Before(now) &&
 				fn.active.Load() == 0 {
-				
+
 				p.cleanup(fn)
 				log.Printf("%s: cleaned up instance (1 -> 0)", k)
 			}
@@ -147,7 +148,7 @@ func (p *Platform) Run(fnName string, executionRuntime *time.Duration) (*Executi
 	if !ok {
 		return nil, ErrFunctionNotFound
 	}
-	
+
 	// Ensure that there is enough capacity
 	var coldStart time.Duration
 	if fn.instances.Load() == 0 {
@@ -157,7 +158,7 @@ func (p *Platform) Run(fnName string, executionRuntime *time.Duration) (*Executi
 		fn.queued.Dec()
 		p.queuedExecutions.Dec()
 	}
-	
+
 	// Simulate function execution
 	fn.active.Inc()
 	p.activeExecutions.Inc()
@@ -169,7 +170,7 @@ func (p *Platform) Run(fnName string, executionRuntime *time.Duration) (*Executi
 	fn.active.Dec()
 	p.activeExecutions.Dec()
 	finishedAt := time.Now()
-	
+
 	// Update function stats
 	fn.mu.Lock()
 	fn.lastExec = time.Now()
@@ -196,7 +197,7 @@ func (p *Platform) Deploy(fnName string) (coldStart time.Duration, err error) {
 	if !ok {
 		return 0, ErrFunctionNotFound
 	}
-	
+
 	return p.deploy(fn), nil
 }
 

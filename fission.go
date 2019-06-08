@@ -1,27 +1,29 @@
 package simfaas
 
 import (
-	`encoding/json`
-	`errors`
-	`io/ioutil`
-	`log`
-	`net/http`
-	`net/url`
-	`regexp`
-	`strconv`
-	`strings`
-	`time`
+	"encoding/json"
+	"errors"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // Fission is a wrapper on top of simfaas that emulates a part of the
 // interface of Fission.
 type Fission struct {
-	Platform                 *Platform
-	FnFactory                func(name string) *FunctionConfig
-	
+	Platform  *Platform
+	FnFactory func(name string) *FunctionConfig
+
 	// CreateUndefinedFunctions enables, if set to true,
 	// the automatic creation of a function if it is called.
 	CreateUndefinedFunctions bool
+	// CustomFn allows us to execute custom functions based on the functio name passed to the system
+	CustomFn CustomHandler
 }
 
 func (f *Fission) Start() error {
@@ -54,12 +56,12 @@ func (f *Fission) TapService(svcURL string) error {
 	}
 	fnName := svc2fn(svcURL)
 	f.createIfUndefined(fnName)
-	
+
 	fn, ok := f.Platform.Get(fnName)
 	if !ok {
 		return ErrFunctionNotFound
 	}
-	
+
 	// Tapping is an async operation
 	go func() {
 		_ = f.Platform.deploy(fn)
@@ -71,9 +73,30 @@ func (f *Fission) TapService(svcURL string) error {
 //
 // If the runtime is not nil it will be used to override the runtime
 // specified in the config of the function.
-func (f *Fission) Run(fnName string, runtime *time.Duration) (*ExecutionReport, error) {
+func (f *Fission) Run(r *http.Request, runtime *time.Duration) (*ExecutionReport, error) {
+	fnName := getFunctionNameFromUrl(r.URL)
 	f.createIfUndefined(fnName)
-	return f.Platform.Run(fnName, runtime)
+	report, err := f.Platform.Run(fnName, runtime)
+	if err != nil {
+		return nil, err
+	}
+
+	// before simulating execution, execute our custom response generator.
+	// The time taken for this is considered negligable and not included in
+	// the simulation stats
+	if useCustomFn(&r.Header) {
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		res, err := f.CustomFn.ExecFn(fnName, body)
+		if err != nil {
+			return nil, err
+		}
+		report.Response = string(res)
+	}
+
+	return report, nil
 }
 
 func (f *Fission) Serve() http.Handler {
@@ -100,7 +123,7 @@ func (f *Fission) HandleGetServiceForFunction(w http.ResponseWriter, r *http.Req
 		http.Error(w, "failed to parse function metadata", 400)
 		return
 	}
-	
+
 	svc, err := f.GetServiceForFunction(meta.Name)
 	if err != nil {
 		http.Error(w, err.Error(), 404)
@@ -153,14 +176,13 @@ func (f *Fission) HandleFunctionRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	runtime := time.Duration(seconds * float64(time.Second))
-	fnName := getFunctionNameFromUrl(r.URL)
-	
-	report, err := f.Run(fnName, &runtime)
+
+	report, err := f.Run(r, &runtime)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	
+
 	result, err := json.Marshal(report)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -196,4 +218,8 @@ func svc2fn(svc string) string {
 		return svc
 	}
 	return svcURL.Host
+}
+
+func useCustomFn(h *http.Header) bool {
+	return h.Get(CUSTOM_FN_HEADER) != ""
 }

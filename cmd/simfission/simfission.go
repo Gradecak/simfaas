@@ -2,30 +2,30 @@ package main
 
 import (
 	"encoding/json"
-	`flag`
-	`github.com/erwinvaneyk/simfaas`
-	`github.com/prometheus/client_golang/prometheus`
-	`github.com/prometheus/client_golang/prometheus/promhttp`
+	"flag"
+	"github.com/erwinvaneyk/simfaas"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"log"
 	"net/http"
-	`regexp`
+	"regexp"
 	"time"
 )
 
 var (
 	// buildTime is a UNIX datetime that should be injected at build time.
 	buildTime string // UNIX
-	
+
 	//
 	// HTTP server metrics
 	//
-	
+
 	requestCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "simfaas",
 		Name:      "api_request_count",
 		Help:      "Number of requests to an endpoint.",
 	}, []string{"path", "code", "method"})
-	
+
 	requestDuration = prometheus.NewSummaryVec(prometheus.SummaryOpts{
 		Namespace: "simfaas",
 		Name:      "api_request_duration",
@@ -44,28 +44,28 @@ var (
 			1:    0.001,
 		},
 	}, []string{"path", "code", "method"})
-	
+
 	//
 	// Execution metrics
 	//
-	
+
 	// TODO also include function name
 	executionStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "simfaas",
 		Name:      "executions",
 		Help:      "Number of function executions inflight.",
 	}, []string{"status"})
-	
+
 	//
 	// (Simulated) Resource Metrics
 	//
-	
+
 	fnResources = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "simfaas",
 		Name:      "fn_resource_usage",
 		Help:      "Current simulated resource usage of functions.",
 	})
-	
+
 	fnResourceUsage = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "simfaas",
 		Name:      "fn_resource_usage_total",
@@ -84,7 +84,7 @@ func main() {
 	addr := flag.String("addr", ":8888", "Address serve the API on.")
 	flag.Parse()
 	log.Printf("simfission %s", buildTime)
-	
+
 	useColdStarts := *coldStart > 0 || *keepWarm > 0
 	if !useColdStarts {
 		log.Println("cold starts disabled. Cold start duration or keep warm duration should be larger than zero.")
@@ -92,7 +92,7 @@ func main() {
 		log.Printf("cold starts enabled (cold start: %s, keep-warm: %s)", (*coldStart).String(),
 			(*keepWarm).String())
 	}
-	
+
 	// Setup simulator
 	fission := simfaas.Fission{
 		Platform:                 simfaas.New(),
@@ -103,12 +103,13 @@ func main() {
 				KeepWarm:  *keepWarm,
 			}
 		},
+		CustomFn: CustomZoneHandler,
 	}
 	if err := fission.Start(); err != nil {
 		log.Fatalf("Failed to start FaaS simulator: %v", err)
 	}
 	defer fission.Close()
-	
+
 	// Publish FaaS simulator resource usage to Prometheus
 	go func() {
 		ticker := time.NewTicker(time.Second)
@@ -121,7 +122,7 @@ func main() {
 			executionStatus.WithLabelValues("active").Set(float64(fission.Platform.ActiveExecutions()))
 		}
 	}()
-	
+
 	// Application info
 	versionHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -141,7 +142,7 @@ func main() {
 			panic(err)
 		}
 	})
-	
+
 	// Collect and expose metrics
 	mux := &simfaas.RegexpHandler{}
 	instrumentEndpoint(mux, regexp.MustCompile("/"), versionHandler)
@@ -150,7 +151,7 @@ func main() {
 	instrumentEndpoint(mux, regexp.MustCompile("/v2/tapService"), http.HandlerFunc(fission.HandleTapService))
 	instrumentEndpoint(mux, regexp.MustCompile("/v2/getServiceForFunction"), http.HandlerFunc(fission.HandleGetServiceForFunction))
 	instrumentEndpoint(mux, regexp.MustCompile("/fission-function/.*"), http.HandlerFunc(fission.HandleFunctionRun))
-	
+
 	// Start serving
 	log.Printf("Serving at %s", *addr)
 	log.Fatal((&http.Server{
