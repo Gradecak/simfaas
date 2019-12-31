@@ -3,13 +3,14 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"github.com/erwinvaneyk/simfaas"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"log"
 	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/erwinvaneyk/simfaas"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
@@ -143,10 +144,31 @@ func main() {
 		}
 	})
 
+	setColdStartHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		newColdStart, ok := r.URL.Query()["cs"]
+		if !ok {
+			log.Printf("No cold start in request")
+			return
+		}
+		cs, err := time.ParseDuration(newColdStart[0])
+		if err != nil {
+			http.Error(w, "Invalid Duration", http.StatusBadRequest)
+			return
+		}
+		log.Printf("Setting cold start to %v", cs.String())
+		fission.FnFactory = func(fnName string) *simfaas.FunctionConfig {
+			return &simfaas.FunctionConfig{
+				ColdStart: cs,
+				KeepWarm:  *keepWarm,
+			}
+		}
+	})
+
 	// Collect and expose metrics
 	mux := &simfaas.RegexpHandler{}
 	instrumentEndpoint(mux, regexp.MustCompile("/"), versionHandler)
 	mux.Handler(regexp.MustCompile("/metrics"), promhttp.Handler())
+	mux.Handler(regexp.MustCompile("/set/cold-start"), setColdStartHandler)
 	instrumentEndpoint(mux, regexp.MustCompile("/v2/functions/.*"), http.HandlerFunc(fission.HandleFunctionsGet))
 	instrumentEndpoint(mux, regexp.MustCompile("/v2/tapService"), http.HandlerFunc(fission.HandleTapService))
 	instrumentEndpoint(mux, regexp.MustCompile("/v2/getServiceForFunction"), http.HandlerFunc(fission.HandleGetServiceForFunction))

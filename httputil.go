@@ -1,8 +1,9 @@
 package simfaas
 
 import (
-	`net/http`
-	`regexp`
+	"net/http"
+	"regexp"
+	"strings"
 )
 
 // RegexpHandler is simple http.Handler to enable the use of
@@ -20,10 +21,12 @@ func (h *RegexpHandler) HandleFunc(pattern *regexp.Regexp, handler func(http.Res
 }
 
 func (h *RegexpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// strip ? character to ignore query paramaters when matching routes
+	path := strings.Split(r.URL.Path, "?")[0]
 	// Reverse match, such that newer routes have precedence
 	for i := len(h.routes) - 1; i >= 0; i-- {
 		route := h.routes[i]
-		if route.pattern.MatchString(r.URL.Path) {
+		if route.pattern.MatchString(path) {
 			route.handler.ServeHTTP(w, r)
 			return
 		}
